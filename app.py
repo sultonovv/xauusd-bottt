@@ -46,6 +46,7 @@ ALERT_SYMBOL = os.environ.get("ALERT_SYMBOL", "XAUUSD")
 LOCAL_TZ = timezone(timedelta(hours=5))
 
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+BOT_START_TIME = datetime.now(LOCAL_TZ)
 
 
 def format_alert_message(raw_text: str) -> str:
@@ -146,6 +147,109 @@ def webhook(secret):
 @app.route("/", methods=["GET"])
 def health():
     return "TV -> Telegram webhook server ishlayapti.", 200
+
+
+@app.route("/telegram/<secret>", methods=["POST"])
+def telegram_webhook(secret):
+    """
+    Telegram foydalanuvchi botga xabar/komanda yozganda shu manzilga
+    so'rov yuboradi (setWebhook orqali ulanadi - /admin/setup ga qarang).
+    """
+    if secret != WEBHOOK_SECRET:
+        log.warning("Telegram webhook'da noto'g'ri secret: %s", secret)
+        return jsonify({"error": "unauthorized"}), 403
+
+    update = request.get_json(silent=True) or {}
+    message = update.get("message") or {}
+    chat = message.get("chat") or {}
+    incoming_chat_id = chat.get("id")
+    text = (message.get("text") or "").strip()
+
+    if not incoming_chat_id or not text:
+        return jsonify({"status": "ignored"}), 200
+
+    command = text.split()[0].lower()
+
+    if command == "/start":
+        reply = (
+            f"👋 Salom! Men {ALERT_SYMBOL} savdo signal botiman.\n\n"
+            "TradingView indikatoridan signal kelganda, sizga avtomatik "
+            "xabar yuboraman. Hech narsa qilishingiz shart emas.\n\n"
+            "Buyruqlar:\n"
+            "/help — yordam va qo'llanma\n"
+            "/status — bot holatini tekshirish"
+        )
+    elif command == "/help":
+        reply = (
+            "ℹ️ <b>Qo'llanma</b>\n\n"
+            f"Bu bot TradingView'dagi {ALERT_SYMBOL} indikatoridan kelgan "
+            "savdo signallarini avtomatik sizga yuboradi.\n\n"
+            "🟢 — BUY/BULL signal\n"
+            "🔴 — SELL/BEAR signal\n\n"
+            "Buyruqlar:\n"
+            "/start — botni qayta ishga tushirish\n"
+            "/status — bot ishlab turganini tekshirish"
+        )
+    elif command == "/status":
+        uptime = datetime.now(LOCAL_TZ) - BOT_START_TIME
+        hours = int(uptime.total_seconds() // 3600)
+        minutes = int((uptime.total_seconds() % 3600) // 60)
+        reply = (
+            "✅ Bot ishlab turibdi.\n"
+            f"⏱ Ishlagan vaqti: {hours} soat {minutes} daqiqa\n"
+            f"📊 Symbol: <b>{ALERT_SYMBOL}</b>"
+        )
+    else:
+        reply = "Noma'lum buyruq. /help yozib ko'ring."
+
+    try:
+        requests.post(
+            TELEGRAM_API_URL,
+            data={"chat_id": incoming_chat_id, "text": reply, "parse_mode": "HTML"},
+            timeout=10,
+        )
+    except requests.RequestException as e:
+        log.error("Komandaga javob yuborishda xato: %s", e)
+
+    return jsonify({"status": "ok"}), 200
+
+
+@app.route("/admin/setup/<secret>", methods=["GET"])
+def admin_setup(secret):
+    """
+    Bir martalik sozlash: bot buyruqlar menyusini o'rnatadi va Telegram
+    webhook'ni ulaydi. Deploy qilingandan keyin shu manzilni brauzerda
+    bir marta ochish kifoya:
+        https://<domen>/admin/setup/<WEBHOOK_SECRET>
+    """
+    if secret != WEBHOOK_SECRET:
+        return jsonify({"error": "unauthorized"}), 403
+
+    base_url = request.url_root.rstrip("/")
+    telegram_webhook_url = f"{base_url}/telegram/{WEBHOOK_SECRET}"
+
+    results = {}
+
+    commands = [
+        {"command": "start", "description": "Botni ishga tushirish"},
+        {"command": "help", "description": "Yordam va qo'llanma"},
+        {"command": "status", "description": "Bot holatini tekshirish"},
+    ]
+    resp1 = requests.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/setMyCommands",
+        json={"commands": commands},
+        timeout=10,
+    )
+    results["setMyCommands"] = resp1.json()
+
+    resp2 = requests.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook",
+        data={"url": telegram_webhook_url},
+        timeout=10,
+    )
+    results["setWebhook"] = resp2.json()
+
+    return jsonify(results), 200
 
 
 if __name__ == "__main__":
