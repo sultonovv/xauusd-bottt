@@ -20,7 +20,10 @@ Kerakli environment variable'lar:
 """
 
 import os
+import re
+import html
 import logging
+from datetime import datetime, timezone, timedelta
 
 from flask import Flask, request, jsonify
 import requests
@@ -37,7 +40,59 @@ BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 WEBHOOK_SECRET = os.environ["WEBHOOK_SECRET"]
 
+# Xabarda ko'rsatiladigan savdo instrumenti nomi (xohlasangiz o'zgartiring)
+ALERT_SYMBOL = os.environ.get("ALERT_SYMBOL", "XAUUSD")
+# Vaqtni shu zonada ko'rsatamiz (Toshkent = UTC+5)
+LOCAL_TZ = timezone(timedelta(hours=5))
+
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
+
+def format_alert_message(raw_text: str) -> str:
+    """
+    Indikatordan kelgan xom matnni (masalan
+    'BULL CONFIRMED | SL=4250.12 | Entry=4255.30') chiroyli,
+    o'qish oson Telegram xabariga aylantiradi.
+    """
+    text = (raw_text or "").strip()
+    if not text:
+        return "ℹ️ <b>Bo'sh xabar keldi</b>"
+
+    upper = text.upper()
+
+    if "BULL" in upper or "BUY" in upper:
+        emoji = "🟢"
+        direction_label = "BUY / BULL"
+    elif "BEAR" in upper or "SELL" in upper:
+        emoji = "🔴"
+        direction_label = "SELL / BEAR"
+    else:
+        emoji = "ℹ️"
+        direction_label = None
+
+    # "SL=..." va "Entry=..." qiymatlarini ajratib olamiz (mavjud bo'lsa)
+    sl_match = re.search(r"SL\s*=\s*([\d.]+)", text, re.IGNORECASE)
+    entry_match = re.search(r"Entry\s*=\s*([\d.]+)", text, re.IGNORECASE)
+
+    # "|" belgisigacha bo'lgan qism - signal nomi/sarlavhasi
+    title = text.split("|")[0].strip()
+    title_safe = html.escape(title)
+
+    now_str = datetime.now(LOCAL_TZ).strftime("%d.%m.%Y %H:%M")
+
+    if direction_label:
+        header = f"{emoji} <b>{direction_label}</b> — {title_safe}"
+    else:
+        header = f"{emoji} <b>{title_safe}</b>"
+
+    lines = [header, f"📊 Symbol: <b>{ALERT_SYMBOL}</b>"]
+    if entry_match:
+        lines.append(f"🎯 Entry: <b>{entry_match.group(1)}</b>")
+    if sl_match:
+        lines.append(f"🛑 SL: <b>{sl_match.group(1)}</b>")
+    lines.append(f"🕐 Vaqt: {now_str} (Toshkent)")
+
+    return "\n".join(lines)
 
 
 def send_telegram_message(text: str) -> None:
@@ -48,11 +103,19 @@ def send_telegram_message(text: str) -> None:
     try:
         resp = requests.post(
             TELEGRAM_API_URL,
-            data={"chat_id": CHAT_ID, "text": text},
+            data={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"},
             timeout=10,
         )
         if resp.status_code != 200:
             log.error("Telegram API xatosi: %s - %s", resp.status_code, resp.text)
+            # HTML formatlashda xato bo'lsa (masalan teglar noto'g'ri yopilgan),
+            # formatlamasdan oddiy matn sifatida qayta yuborib ko'ramiz.
+            plain = re.sub(r"<[^>]+>", "", text)
+            requests.post(
+                TELEGRAM_API_URL,
+                data={"chat_id": CHAT_ID, "text": plain},
+                timeout=10,
+            )
         else:
             log.info("Telegramga yuborildi: %s", text[:80].replace("\n", " "))
     except requests.RequestException as e:
@@ -74,7 +137,8 @@ def webhook(secret):
         message = request.get_data(as_text=True)
 
     log.info("Webhook qabul qilindi: %s", message[:200].replace("\n", " "))
-    send_telegram_message(message)
+    formatted = format_alert_message(message)
+    send_telegram_message(formatted)
 
     return jsonify({"status": "ok"}), 200
 
