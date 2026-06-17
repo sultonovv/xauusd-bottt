@@ -241,7 +241,9 @@ def admin_setup(secret):
     if secret != WEBHOOK_SECRET:
         return jsonify({"error": "unauthorized"}), 403
 
-    base_url = request.url_root.rstrip("/")
+    # Railway proksisi ichkarida "http" deb ko'rsatishi mumkin, shuning uchun
+    # manzilni majburan https qilib quramiz (Telegram faqat https qabul qiladi).
+    base_url = f"https://{request.host}"
     telegram_webhook_url = f"{base_url}/telegram/{WEBHOOK_SECRET}"
 
     results = {}
