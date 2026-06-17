@@ -48,6 +48,20 @@ LOCAL_TZ = timezone(timedelta(hours=5))
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 BOT_START_TIME = datetime.now(LOCAL_TZ)
 
+# Pastda doimiy ko'rinib turadigan tugmali menyu
+BTN_STATUS = "📊 Holat"
+BTN_HELP = "ℹ️ Yordam"
+BTN_RESTART = "🔄 Qayta ishga tushirish"
+
+MAIN_KEYBOARD = {
+    "keyboard": [
+        [BTN_STATUS, BTN_HELP],
+        [BTN_RESTART],
+    ],
+    "resize_keyboard": True,
+    "is_persistent": True,
+}
+
 
 def format_alert_message(raw_text: str) -> str:
     """
@@ -170,27 +184,24 @@ def telegram_webhook(secret):
 
     command = text.split()[0].lower()
 
-    if command == "/start":
+    if command == "/start" or text == BTN_RESTART:
         reply = (
             f"👋 Salom! Men {ALERT_SYMBOL} savdo signal botiman.\n\n"
             "TradingView indikatoridan signal kelganda, sizga avtomatik "
             "xabar yuboraman. Hech narsa qilishingiz shart emas.\n\n"
-            "Buyruqlar:\n"
-            "/help — yordam va qo'llanma\n"
-            "/status — bot holatini tekshirish"
+            "Pastdagi tugmalardan foydalanishingiz mumkin 👇"
         )
-    elif command == "/help":
+    elif command == "/help" or text == BTN_HELP:
         reply = (
             "ℹ️ <b>Qo'llanma</b>\n\n"
             f"Bu bot TradingView'dagi {ALERT_SYMBOL} indikatoridan kelgan "
             "savdo signallarini avtomatik sizga yuboradi.\n\n"
             "🟢 — BUY/BULL signal\n"
             "🔴 — SELL/BEAR signal\n\n"
-            "Buyruqlar:\n"
-            "/start — botni qayta ishga tushirish\n"
-            "/status — bot ishlab turganini tekshirish"
+            f"{BTN_STATUS} — bot ishlab turganini tekshirish\n"
+            f"{BTN_RESTART} — botni qayta ishga tushirish"
         )
-    elif command == "/status":
+    elif command == "/status" or text == BTN_STATUS:
         uptime = datetime.now(LOCAL_TZ) - BOT_START_TIME
         hours = int(uptime.total_seconds() // 3600)
         minutes = int((uptime.total_seconds() % 3600) // 60)
@@ -200,12 +211,17 @@ def telegram_webhook(secret):
             f"📊 Symbol: <b>{ALERT_SYMBOL}</b>"
         )
     else:
-        reply = "Noma'lum buyruq. /help yozib ko'ring."
+        reply = "Noma'lum buyruq. Pastdagi tugmalardan foydalaning 👇"
 
     try:
         requests.post(
             TELEGRAM_API_URL,
-            data={"chat_id": incoming_chat_id, "text": reply, "parse_mode": "HTML"},
+            json={
+                "chat_id": incoming_chat_id,
+                "text": reply,
+                "parse_mode": "HTML",
+                "reply_markup": MAIN_KEYBOARD,
+            },
             timeout=10,
         )
     except requests.RequestException as e:
